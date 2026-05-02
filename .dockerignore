@@ -1,0 +1,40 @@
+# Docker ignore file
+# Ignore Maven build artifacts
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Environment files
+.env
+.env.local
+
+# Git
+.git/
+.gitignore
+
+# Test files
+src/test/
+*Test.java
+*Tests.java
+
+# Documentation
+*.md
+docs/
