@@ -14,6 +14,7 @@ on:
 env:
   DOCKER_IMAGE_NAME: task-manager
   DOCKER_CONTAINER_NAME: task-app
+  EC2_SSH_USER: ec2-user
 
 jobs:
   # ========================================
@@ -107,8 +108,25 @@ jobs:
       - name: Add SSH key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_KEY }}" > ~/.ssh/id_rsa
+          chmod 700 ~/.ssh
+          python3 - <<'PY' > ~/.ssh/id_rsa
+import os
+import base64
+key = os.environ['EC2_SSH_KEY']
+if '\\n' in key and '-----BEGIN' not in key:
+    key = key.replace('\\n', '\n')
+key = key.replace('\r\n', '\n').replace('\r', '\n')
+if '-----BEGIN' not in key:
+    try:
+        decoded = base64.b64decode(key)
+        if b'PRIVATE KEY' in decoded:
+            key = decoded.decode('utf-8')
+    except Exception:
+        pass
+print(key, end='')
+PY
           chmod 600 ~/.ssh/id_rsa
+          ssh-keygen -lf ~/.ssh/id_rsa
       
       # Update known hosts
       - name: Update known hosts
@@ -124,29 +142,18 @@ jobs:
       # SSH and deploy
       - name: Deploy to EC2
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
-            # Stop and remove existing container
-            docker stop ${{ env.DOCKER_CONTAINER_NAME }} 2>/dev/null || true
-            docker rm ${{ env.DOCKER_CONTAINER_NAME }} 2>/dev/null || true
-            
-            # Pull latest image
+          ssh -i ~/.ssh/id_rsa -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ${{ env.EC2_SSH_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+            docker stop ${{ env.DOCKER_CONTAINER_NAME }} || true
+            docker rm ${{ env.DOCKER_CONTAINER_NAME }} || true
+
             docker pull ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:latest
-            
-            # Run new container with environment variables
+
             docker run -d \
               --name ${{ env.DOCKER_CONTAINER_NAME }} \
               -p 8080:8080 \
-              -e DB_URL="${{ secrets.DB_URL }}" \
-              -e DB_USERNAME="${{ secrets.DB_USERNAME }}" \
-              -e DB_PASSWORD="${{ secrets.DB_PASSWORD }}" \
-              --restart unless-stopped \
               ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:latest
-            
-            # Show running containers
+
             docker ps
-            
-            # Show logs
-            docker logs ${{ env.DOCKER_CONTAINER_NAME }} --tail 20
           EOF
       
       # Verify deployment
