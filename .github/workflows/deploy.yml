@@ -2,7 +2,7 @@
 # CI/CD Pipeline for Task Manager
 # ========================================
 
-name: Deploy to AWS
+name: Production Delivery Pipeline
 
 on:
   push:
@@ -114,11 +114,6 @@ jobs:
           sed -i 's/\r$//' ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keygen -lf ~/.ssh/id_rsa
-      
-      # Update known hosts
-      - name: Update known hosts
-        run: |
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
       
       # Wait for EC2 to be ready
       - name: Wait for EC2
