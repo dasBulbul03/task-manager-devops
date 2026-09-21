@@ -19,6 +19,7 @@ env:
   APP_NAME: task-manager
   CONTAINER_NAME: task-app
   EC2_SSH_USER: ec2-user
+  EC2_TAG_NAME: taskmanager-ec2
 
 jobs:
   # ========================================
@@ -112,6 +113,31 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Configure AWS credentials (to resolve the live EC2 public address)
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Resolve the CURRENT EC2 public IP (the Terraform-managed Elastic IP)
+      - name: Get EC2 public IP
+        id: get-ip
+        run: |
+          IP=$(aws ec2 describe-instances \
+            --region "${{ env.AWS_REGION }}" \
+            --filters "Name=tag:Name,Values=${{ env.EC2_TAG_NAME }}" \
+                      "Name=instance-state-name,Values=running" \
+            --query 'Reservations[].Instances[0].PublicIpAddress' \
+            --output text)
+          if [ -z "$IP" ] || [ "$IP" = "None" ]; then
+            echo "::error::Could not determine running EC2 public IP"
+            exit 1
+          fi
+          echo "Resolved EC2 IP: $IP"
+          echo "ip=$IP" >> "$GITHUB_OUTPUT"
+
       # Add SSH key
       - name: Add SSH key
         run: |
@@ -124,13 +150,13 @@ jobs:
       # Update known hosts
       - name: Update known hosts
         run: |
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ steps.get-ip.outputs.ip }} >> ~/.ssh/known_hosts
 
       # Deploy to EC2 (EC2 authenticates to ECR via its IAM instance profile)
       - name: Deploy to EC2
         run: |
           ssh -i ~/.ssh/id_rsa -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
-            ${{ env.EC2_SSH_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+            ${{ env.EC2_SSH_USER }}@${{ steps.get-ip.outputs.ip }} << 'EOF'
             set -e
             REGISTRY=${{ needs.docker.outputs.registry }}
 
@@ -160,7 +186,7 @@ jobs:
         run: |
           echo "Waiting for application to start..."
           for i in $(seq 1 12); do
-            if curl -fsS "http://${{ secrets.EC2_HOST }}:8080/actuator/health"; then
+            if curl -fsS "http://${{ steps.get-ip.outputs.ip }}:8080/actuator/health"; then
               echo "Deployment successful!"
               exit 0
             fi
