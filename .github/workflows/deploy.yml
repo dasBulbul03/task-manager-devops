@@ -7,13 +7,13 @@ name: Deploy to AWS
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 # Environment variables
 env:
-  DOCKER_IMAGE_NAME: task-manager
-  DOCKER_CONTAINER_NAME: task-app
+  AWS_REGION: ap-south-1
+  APP_NAME: task-manager
+  CONTAINER_NAME: task-app
   EC2_SSH_USER: ec2-user
 
 jobs:
@@ -50,35 +50,34 @@ jobs:
   docker:
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+
+    outputs:
+      registry: ${{ steps.ecr-login.outputs.registry }}
     
     steps:
       # Checkout code
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: 'true'
       
       # Set up Docker Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
-      # Login to Docker Hub
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-      
-      # Extract metadata
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,prefix=
-            type=raw,value=latest
       
       # Build and push Docker image
       - name: Build and push Docker image
@@ -86,8 +85,9 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.APP_NAME }}:latest
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.APP_NAME }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -97,7 +97,9 @@ jobs:
   deploy:
     needs: docker
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
     
     steps:
       # Checkout code
@@ -128,15 +130,26 @@ jobs:
       - name: Deploy to EC2
         run: |
           ssh -i ~/.ssh/id_rsa -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ${{ env.EC2_SSH_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
-            docker stop ${{ env.DOCKER_CONTAINER_NAME }} || true
-            docker rm ${{ env.DOCKER_CONTAINER_NAME }} || true
+            set -e
+            REGISTRY=${{ needs.docker.outputs.registry }}
 
-            docker pull ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:latest
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} \
+              | docker login --username AWS --password-stdin "$REGISTRY"
+
+            docker stop ${{ env.CONTAINER_NAME }} || true
+            docker rm ${{ env.CONTAINER_NAME }} || true
+
+            docker pull "$REGISTRY/${{ env.APP_NAME }}:latest"
 
             docker run -d \
-              --name ${{ env.DOCKER_CONTAINER_NAME }} \
+              --name ${{ env.CONTAINER_NAME }} \
+              --restart unless-stopped \
               -p 8080:8080 \
-              ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:latest
+              -e SPRING_PROFILES_ACTIVE=prod \
+              -e DB_URL=${{ secrets.DB_URL }} \
+              -e DB_USERNAME=${{ secrets.DB_USERNAME }} \
+              -e DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
+              "$REGISTRY/${{ env.APP_NAME }}:latest"
 
             docker ps
           EOF
