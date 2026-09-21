@@ -1,7 +1,7 @@
 # ================================
 # Stage 1: Build
 # ================================
-FROM maven:3.9-eclipse-temurin-21 AS build
+FROM public.ecr.aws/docker/library/maven:3.9-eclipse-temurin-21 AS build
 
 WORKDIR /app
 
@@ -17,7 +17,7 @@ RUN mvn clean package -DskipTests -B
 # ================================
 # Stage 2: Runtime
 # ================================
-FROM eclipse-temurin:21-jre
+FROM public.ecr.aws/docker/library/eclipse-temurin:21-jre
 
 WORKDIR /app
 
